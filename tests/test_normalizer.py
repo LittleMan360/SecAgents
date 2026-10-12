@@ -119,6 +119,36 @@ class TestNormalizer(unittest.TestCase):
         self.assertEqual(result["mitre_ids"], [])
         self.assertIsNone(result["event_type"])
 
+    def test_source_ip(self):
+        event = {
+            "document_id": "test-004",
+            "alert": {
+                "agent": {"name": "test-server"},
+                "rule": {"level": 7},
+                "data": {
+                    "srcip": "192.0.2.50"
+                }
+            }
+        }
+
+        result = normalize_alert(event)
+
+        self.assertEqual(result["source_ip"], "192.0.2.50")
+
+    def test_event_index(self):
+        event = {
+            "index": "wazuh-alerts-example",
+            "document_id": "test-005",
+            "alert": {
+                "agent": {"name": "test-server"},
+                "rule": {"level": 7}
+            }
+        }
+
+        result = normalize_alert(event)
+
+        self.assertEqual(result["event_id"], "test-005")
+        self.assertEqual(result["event_index"], "wazuh-alerts-example")
 
 if __name__ == "__main__":
     unittest.main()

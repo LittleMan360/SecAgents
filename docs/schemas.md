@@ -2,24 +2,24 @@
 
 ## Overview
 
-This document explains how SecAgents handles Wazuh alerts and how the data will be passed to the AI model for analysis.
+This is the initial setup for how we're going to handle Wazuh alerts and AI responses in SecAgents.
 
-Since Wazuh alerts can contain different information depending on the type of event, we need a consistent format before sending anything to the AI. This makes it easier for the rest of the application to work with the alerts without having to account for every possible Wazuh event structure.
+Since Wazuh alerts don't always contain the same information, I needed a way to pull out the fields we're interested in and put them into a consistent format before they get sent to the AI model.
 
-For this part of the project, I created two Python files:
+I started with two Python files:
 
-- `normalizer.py` - Takes the original Wazuh alert and extracts the information we need.
-- `schemas.py` - Checks that the normalized alert and AI responses contain the correct fields and data types.
+- `app/normalizer.py` - Pulls information from the original Wazuh alert and organizes it into a standard format.
+- `app/schemas.py` - Validates the normalized alerts and the responses we'll eventually get back from the AI.
 
-The goal is to make sure the AI gateway receives consistent information and that any responses coming back from the model follow a predictable format.
+Right now, these handle the data formatting and validation. The actual connection to the local AI model is still being worked on.
 
-## Wazuh Alert Input
+## Wazuh Input
 
-The alerts come from the Wazuh integration already configured on the AI server.
+We're using the existing Wazuh integration on the AI server to retrieve alerts.
 
-Each alert contains information about the event, such as when it happened, which system it came from, the Wazuh rule that triggered it, and its severity level.
+The alerts include information like the hostname, severity, rule ID, and a description of what triggered the alert. Depending on the event, they can also include IP addresses, MITRE ATT&CK techniques, or additional details.
 
-Here is an example of the alert format:
+Here's a sample file integrity alert based on the structure we're receiving:
 
 ```json
 {
@@ -47,24 +47,22 @@ Here is an example of the alert format:
 }
 ```
 
-This example represents a file integrity alert, where Wazuh detected that a monitored file had changed.
+This alert is reporting that Wazuh detected a change to a monitored file.
 
-Different types of alerts may contain additional fields or may not include some of the fields shown above.
+## Normalizing Wazuh Alerts
 
-## Normalizing the Alerts
+The `normalize_alert()` function takes the original alert and extracts the fields we need.
 
-The purpose of `normalizer.py` is to take the original Wazuh alert and convert it into a simpler structure.
-
-Instead of having the rest of the application search through the original Wazuh JSON, the normalizer pulls out the information we expect to use most often.
-
-For example, the alert above would be converted into:
+For the example above, the normalized event would look like this:
 
 ```json
 {
   "event_id": "test-001",
+  "event_index": "wazuh-alerts-example",
   "timestamp": "2026-10-08T16:57:36.956Z",
   "hostname": "test-server",
   "agent_ip": "192.0.2.10",
+  "source_ip": null,
   "severity": 7,
   "severity_label": "Medium",
   "rule_id": "550",
@@ -80,58 +78,69 @@ For example, the alert above would be converted into:
 }
 ```
 
-The normalizer also converts Wazuh severity levels into readable categories:
+I also added severity labels so we don't have to rely only on Wazuh's numerical severity levels.
 
-| Wazuh Level | Category |
+| Wazuh Level | Label |
 |---|---|
 | 0-6 | Low |
 | 7-11 | Medium |
 | 12-14 | High |
 | 15-16 | Critical |
 
-Currently, the normalizer also recognizes file integrity alerts and extracts information such as the modified file, the type of change, and the process involved when that information is available.
+One thing I had to account for was the difference between the agent IP and source IP.
 
-Other alert types can be added as we continue developing the project.
+The `agent_ip` is the address of the monitored system, while `source_ip` is the address associated with the activity that triggered the alert. These aren't necessarily the same.
 
-## Validating Wazuh Events
+Not every Wazuh alert contains a source IP, so the normalizer sets it to `null` when one isn't available.
 
-After an alert is normalized, `schemas.py` checks that the data follows the expected structure.
+I also kept the original document ID and index so we can reference the actual Wazuh event later instead of relying only on the AI's explanation.
 
-This is important because we don't want to send incomplete or incorrectly formatted information to the AI model.
+For now, the normalizer has additional handling for file integrity alerts. Other event types will need to be added as we work through the integration.
 
-The current validation requires the following fields:
+## Event Validation
 
-| Field | Type | Purpose |
-|---|---|---|
-| event_id | String | Identifies the Wazuh alert |
-| timestamp | String | When the event occurred |
-| hostname | String | System that generated the alert |
-| severity | Integer | Original Wazuh severity |
-| severity_label | String | Readable severity category |
-| rule_id | String | Wazuh rule that triggered |
-| description | String | Description of the alert |
-| mitre_ids | List | Associated MITRE ATT&CK techniques |
-| details | Dictionary | Additional event information |
+After normalizing an alert, we use `validate_event()` in `schemas.py` to check that the data is formatted correctly.
 
-The validator also checks that severity values fall within Wazuh's supported range of 0-16.
+These are the main fields we're checking:
 
-If required information is missing or a field contains the wrong type of data, validation fails.
+| Field | Expected Type |
+|---|---|
+| `event_id` | String |
+| `timestamp` | String |
+| `hostname` | String |
+| `severity` | Integer |
+| `severity_label` | String |
+| `rule_id` | String |
+| `description` | String |
+| `mitre_ids` | List of strings |
+| `details` | Dictionary |
+| `event_index` | String or null |
+| `source_ip` | String or null |
 
-Some fields, such as the agent IP address or event type, may not be available for every alert.
+The validator checks that required fields exist and contain the correct data types. It also makes sure the severity is between 0 and 16 and uses one of our supported severity labels.
 
-## AI Response Format
+The `event_index` and `source_ip` fields are optional, but their values are checked when they're included.
 
-Once the normalized event is passed to the AI gateway, the local language model will analyze the alert.
+If something doesn't match the expected format, the validator raises a `SchemaValidationError`.
 
-We need the model to return its analysis in a consistent format so that other parts of SecAgents can use the results.
+## AI Response Schema
 
-The planned AI response looks like this:
+The next part is defining what we expect the local Qwen model to return.
+
+We haven't connected the model to this code yet, but I wanted to have the response format ready before starting that integration.
+
+Here's the current response structure:
 
 ```json
 {
+  "event_id": "test-001",
+  "event_index": "wazuh-alerts-example",
   "summary": "A monitored configuration file was modified.",
+  "source_context": "The change was detected on test-server.",
   "classification": "unknown",
   "confidence": 0.65,
+  "uncertainty": "The alert does not establish whether the change was authorized.",
+  "mitre_explanation": "The alert references MITRE ATT&CK technique T1565.001.",
   "recommended_actions": [
     "Review the file modification history.",
     "Verify whether the change was authorized."
@@ -142,74 +151,73 @@ The planned AI response looks like this:
 }
 ```
 
-The response includes:
+The main things we want from the AI are a short summary of the alert, some context about the source, and recommendations for what an analyst should look into.
 
-- **Summary:** A short explanation of what happened.
-- **Classification:** Whether the activity appears benign, suspicious, malicious, or unknown.
-- **Confidence:** A value between 0 and 1 representing the model's reported confidence.
-- **Recommended actions:** Suggested steps for investigating the event.
-- **Evidence:** Information from the alert that supports the analysis.
+I also included an uncertainty field because the model won't always have enough information to determine whether something is actually malicious.
 
-The AI classification is separate from the original Wazuh severity level. The model should not overwrite the severity assigned by Wazuh.
+For example, Wazuh might report that a configuration file changed, but that doesn't automatically mean someone made an unauthorized change.
 
-The recommendations are intended to help with investigations rather than automatically making changes to monitored systems.
+The response also includes:
 
-## Validating AI Responses
+- `classification` - Benign, suspicious, malicious, or unknown.
+- `confidence` - A number between 0 and 1.
+- `mitre_explanation` - An explanation of the MITRE technique if one is associated with the alert.
+- `recommended_actions` - Steps an analyst could take to investigate.
+- `evidence` - Information from the original alert supporting the analysis.
 
-The second function in `schemas.py` checks the information returned by the AI model.
+The original event ID and index are included so we can connect the AI's analysis back to the Wazuh alert. When we build the gateway, those identifiers should come from the original event rather than relying on the model to generate them.
 
-For an AI response to pass validation, it must:
+The AI won't be responsible for changing Wazuh's original severity or automatically taking action against monitored systems.
 
-- Include all required fields.
-- Use one of the supported classifications.
-- Provide a confidence value between 0 and 1.
-- Return recommendations and evidence as lists of strings.
+## AI Response Validation
 
-If the response doesn't meet these requirements, the validator raises an error.
+I also created `validate_ai_response()` to check the response structure.
 
-This helps prevent the application from accepting unexpected or incorrectly formatted responses.
+It checks that the required fields are present, the classification uses one of our supported values, and confidence is between 0 and 1.
 
-One limitation is that the current validation only checks the structure of the response. It does not verify whether the AI's explanation or evidence is accurate. That will need to be considered when integrating the model.
+The recommendations and evidence also need to be lists of strings.
+
+The MITRE explanation is optional because some alerts don't include MITRE information. It can be a string, `null`, or omitted.
+
+This validation only checks the format of the response. It doesn't confirm whether the AI's conclusions are accurate or whether the evidence actually supports them.
+
+We'll need to handle that separately when building the gateway.
 
 ## Testing
 
-I created automated tests for both the normalizer and schema validation functions.
+I wrote unit tests for the normalizer and both validation functions.
 
-The tests cover:
+So far, the tests cover severity labels, file integrity alerts, missing optional fields, source IP extraction, event references, and invalid data.
 
-- Wazuh severity classification.
-- Normalizing file integrity alerts.
-- Handling missing optional fields.
-- Checking required event fields.
-- Rejecting invalid severity values.
-- Validating AI classifications and confidence values.
-- Rejecting incorrectly formatted AI responses.
-- Confirming that normalized alerts pass schema validation.
+I also added tests for the AI response fields, including classification, confidence, uncertainty, and MITRE explanations.
 
-The tests can be run with:
+To run the tests:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-So far, all 13 tests have passed on both my development machine and the AI server.
+**Current results: 21 tests passed locally on my Mac.**
 
-I also tested the normalizer using real Wazuh alerts retrieved from the existing Wazuh integration.
+An earlier version of the code passed 13 tests on the AI server. I still need to pull the latest changes onto that server and rerun the updated tests.
 
-A real file integrity alert was successfully normalized and passed through the schema validator.
+I also used the existing Wazuh connection to retrieve real alerts and test the normalizer against them.
 
-This confirmed that the input processing works with actual Wazuh data, rather than only the sample events used in the automated tests.
+The file integrity alert I tested was successfully normalized and passed validation. That test was done before the latest schema changes, so I'll repeat it after updating the server.
 
 ## Next Steps
 
-The normalization and validation components are working, but they are only part of the overall AI integration.
+The input and output formats are now drafted, and the validation functions are passing their current tests.
 
-The next steps are to:
+The remaining work is to get the AI gateway connected and start using these schemas with the actual model.
 
-1. Confirm that the Python application can communicate with the local Qwen model through the approved API connection.
-2. Connect the normalized Wazuh events to the AI gateway.
-3. Send events to the model and receive structured responses.
-4. Validate the model's responses using the existing schema.
-5. Implement timeout handling, error logging, and fail-closed behavior.
+My next steps are:
 
-The AI gateway and local model integration still need to be tested before the complete workflow can be considered functional.
+1. Have the SIEM and Documentation team members review the schemas.
+2. Push the latest code to GitHub and test it on the AI server.
+3. Confirm the Python application can communicate with Qwen through the approved API.
+4. Connect the normalized Wazuh alerts to the AI gateway.
+5. Validate the responses coming back from the model.
+6. Add timeout handling, error logging, and fail-closed behavior.
+
+The schemas are ready for an initial review, but the full Wazuh-to-AI workflow hasn't been implemented or tested yet.

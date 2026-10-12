@@ -6,7 +6,6 @@ from app.schemas import (
     validate_ai_response,
 )
 
-
 class TestSchemas(unittest.TestCase):
 
     def setUp(self):
@@ -30,13 +29,19 @@ class TestSchemas(unittest.TestCase):
         }
 
         self.valid_ai_response = {
+            "event_id": "test-001",
+            "event_index": "wazuh-alerts-example",
             "summary": "A monitored configuration file was modified.",
+            "source_context": "The change was detected on test-server.",
             "classification": "unknown",
             "confidence": 0.65,
+            "uncertainty": "The alert does not establish whether the change was authorized.",
+            "mitre_explanation": "The alert references MITRE ATT&CK technique T1565.001.",
             "recommended_actions": [
-                "Review the file modification history."
+                "Review the file modification history.",
+                "Verify whether the change was authorized."
             ],
-            "evidence": [
+                "evidence": [
                 "Wazuh rule 550 detected a file integrity change."
             ]
         }
@@ -108,6 +113,54 @@ class TestSchemas(unittest.TestCase):
 
         with self.assertRaises(SchemaValidationError):
             validate_ai_response(response)
+
+    def test_missing_source_context(self):
+        response = self.valid_ai_response.copy()
+        del response["source_context"]
+
+        with self.assertRaises(SchemaValidationError):
+            validate_ai_response(response)
+
+    def test_missing_uncertainty(self):
+        """AI responses must explain uncertainty."""
+        response = self.valid_ai_response.copy()
+        del response["uncertainty"]
+
+        with self.assertRaises(SchemaValidationError):
+            validate_ai_response(response)
+
+    def test_missing_event_reference(self):
+        """AI responses must reference the original Wazuh event."""
+        response = self.valid_ai_response.copy()
+        del response["event_id"]
+
+        with self.assertRaises(SchemaValidationError):
+            validate_ai_response(response)
+
+    def test_optional_mitre_explanation(self):
+        """MITRE explanations can be null when no technique is available."""
+        response = self.valid_ai_response.copy()
+        response["mitre_explanation"] = None
+
+        result = validate_ai_response(response)
+
+        self.assertIsNone(result["mitre_explanation"])
+
+    def test_invalid_source_ip(self):
+        """Reject source IP values that are not strings or null."""
+        event = self.valid_event.copy()
+        event["source_ip"] = 12345
+
+        with self.assertRaises(SchemaValidationError):
+            validate_event(event)
+
+    def test_invalid_event_index(self):
+        """Reject event index values that are not strings or null."""
+        event = self.valid_event.copy()
+        event["event_index"] = 12345
+
+        with self.assertRaises(SchemaValidationError):
+            validate_event(event)
 
 
 if __name__ == "__main__":
