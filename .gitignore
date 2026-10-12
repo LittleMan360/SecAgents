@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Local configuration and credentials
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+logs/
+
+# Wazuh exports and runtime data
+data/
+exports/
+wazuh-local-test.json
+
+# Development tools
+.DS_Store
+.vscode/
