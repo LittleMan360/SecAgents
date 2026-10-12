@@ -1,9 +1,43 @@
 import unittest
 
+from app.schemas import validate_event
 from app.normalizer import normalize_alert, get_severity_label
 
 
 class TestNormalizer(unittest.TestCase):
+
+    def test_normalize_event_schema(self):
+        """Verify that a normalized event adheres to the expected schema."""
+        event = {
+            "document_id": "test-003",
+            "alert": {
+                "@timestamp": "2026-10-08T16:57:36.956Z",
+                "agent": {
+                    "name": "test-server",
+                    "ip": "192.0.2.10"
+                },
+                "rule": {
+                    "level": 7,
+                    "id": "550",
+                    "description": "Integrity checksum changed.",
+                    "mitre": {
+                        "id": ["T1565.001"]
+                    }
+                },
+                "syscheck": {
+                    "path": "/etc/example/test.conf",
+                    "event": "modified",
+                }
+            }
+        }
+
+        normalized_event = normalize_alert(event)
+
+        # Validate the normalized event against the schema
+        validated_event = validate_event(normalized_event)
+
+        self.assertEqual(validated_event, normalized_event)
+
 
     def test_severity_labels(self):
         """Verify Wazuh severity levels are categorized correctly."""
