@@ -8,7 +8,11 @@ with the locally hosted Ollama language model.
 import json
 
 from app.normalizer import normalize_alert
-from app.schemas import validate_event, validate_ai_response
+from app.schemas import (
+    validate_event, 
+    validate_ai_response,
+    SchemaValidationError
+)
 from app.llm_client import OllamaClient
 
 
@@ -128,21 +132,44 @@ The security alert data follows:
         prompt = self.build_prompt(event)
 
         # 4. Send the prompt to Qwen.
-        ai_text = self.client.generate(prompt)
+        # generated resposes do not match our schema
+        max_attempts = 2
 
-        # 5. Parse the generated JSON.
-        ai_result = json.loads(ai_text)
+        for attempt in range(max_attempts):
+            ai_text = self.client.generate(prompt)
 
-        if not isinstance(ai_result, dict):
-            raise ValueError("AI response must be a JSON object.")
+            try:
+                # 5. Parse the AI-generated JSON.
+                ai_result = json.loads(ai_text)
 
-        # 6. Preserve authoritative Wazuh identifiers.
-        # These values come from the original event,
-        # not from the language model.
-        ai_result["event_id"] = event["event_id"]
-        ai_result["event_index"] = event.get("event_index") or ""
+                if not isinstance(ai_result, dict):
+                    raise SchemaValidationError(
+                        "AI response must be a JSON object."
+                    )
 
-        # 7. Validate the completed AI response.
-        validate_ai_response(ai_result)
+                # 6. Preserve authoritative Wazuh identifiers.
+                # These values come from the original event,
+                # not from the language model.
+                ai_result["event_id"] = event["event_id"]
+                ai_result["event_index"] = event.get("event_index") or ""
 
-        return ai_result
+                # 7. Validate the completed AI response.
+                validate_ai_response(ai_result)
+
+                return ai_result
+
+            except (json.JSONDecodeError, SchemaValidationError):
+
+                if attempt == max_attempts - 1:
+                    raise
+
+                # Give the model specific correction
+                prompt += (
+                    "\n\nIMPORTANT: your previous response failed "
+                    "JSON Schema validation. Regerate the entire "
+                    "analysis using the required field types. "
+                    "mitre_explanation MUST be a single string "
+                    "or JSON null, never an object or array."
+                )
+                
+        
