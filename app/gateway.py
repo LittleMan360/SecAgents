@@ -90,6 +90,11 @@ The security alert data follows:
         structured AI enrichment for a Wazuh alert.
         """
 
+        if not isinstance(raw_event, dict):
+            raise ValueError(
+                "INVALID_INPUT: Wazuh Alert must be a dictionary."
+            )
+
         # 1. Normalize the original Wazuh event.
         event = normalize_alert(raw_event)
 
