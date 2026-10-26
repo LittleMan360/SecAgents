@@ -74,7 +74,30 @@ Return a JSON object containing exactly these fields:
 }
 
 Confidence must be between 0 and 1.
-Use null for mitre_explanation when no MITRE technique exists.
+
+IMPORTANT JSON TYPE ENVIRONMENTS:
+
+- summary must be a string
+- source_context must be a string
+- classification must be exactly one of:
+    - benign
+    - suspicious
+    - malicious
+    - unknown
+- confidence must be a number between 0 and 1
+- uncertainty must be a string
+- recommended_actions must be an array of strings
+- evidence must be an array of strings
+- mitre_explanation must be either:
+    1. a single string explaining the MITRE technique
+    2. JSON null if no MITRE technique is provided
+
+Never return an object, array, or boolean for mitre_explanation.
+
+Do not include event_id or event_index.
+The application will attach those values from the original Wazuh alert.
+
+Return only the requested JSON object.
 
 The security alert data follows:
 """
