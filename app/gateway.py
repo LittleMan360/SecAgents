@@ -46,6 +46,20 @@ class AIGateway:
             for field in approved_fields
         }
 
+        # Provide verified MITRE technique names for known IDs.
+        # These names are controlled by the application.
+        known_mitre_techniques = {
+            "T1565.001": "Stored Data Manipulation",
+        }
+
+        mitre_ids = event.get("mitre_ids") or []
+
+        alert_context["mitre_techniques"] = {
+            technique_id: known_mitre_techniques[technique_id]
+            for technique_id in mitre_ids
+            if technique_id in known_mitre_techniques
+        }
+
         instructions = """
 You are SecAgents, an AI assistant supporting security analysts.
 
@@ -59,6 +73,16 @@ Security requirements:
 - Provide investigation recommendations only.
 - Do not recommend automatically executing security actions.
 - Return only valid JSON without Markdown formatting.
+
+MITRE ATT&CK ACCURACY REQUIREMENTS:
+
+- Use the MITRE technique names provided in mitre_techniques.
+- Do not invent or rename MITRE ATT&CK techniques.
+- Do not substitute a different technique for the supplied ID.
+- If a technique name is not provided, mention only its ID.
+- A MITRE mapping does not prove that an attack occurred.
+- A file integrity change alone does not prove malicious activity.
+- If evidence is insufficient, clearly explain the uncertainty.
 
 Return a JSON object containing exactly these fields:
 
