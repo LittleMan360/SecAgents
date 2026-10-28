@@ -1,187 +1,169 @@
 """
-SecAgents — Live Wazuh AI Demonstration.
+SecAgents — AI Gateway Demonstration
 
-Uses Alex's existing read-only Wazuh Indexer client
-to retrieve recent alerts and analyze them with Qwen.
+Processes previously exported Wazuh alerts using the
+existing SecAgents AI gateway and local Qwen model.
 
-Run:
-    python3 -m examples.demo_live_wazuh
-    python3 -m examples.demo_live_wazuh --limit 5
+Usage:
+    python3 -m examples.demo_ai_gateway
+    python3 -m examples.demo_ai_gateway --all
 """
 
 import argparse
 import json
 import os
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
+import time
 
 from app.gateway import AIGateway
-from examples.demo_ai_gateway import display_analysis
+from app.normalizer import normalize_alert
+from app.schemas import validate_event
 
 
-DEFAULT_CLIENT = Path.home() / "wazuh-ai-client" / "wazuh_client.py"
+DEFAULT_DATASET = (
+    "/home/dalton/wazuh-ai-client/wazuh-local-test.json"
+)
+
+
+def display_analysis(number, total, raw_event, gateway):
+    """Analyze and display one Wazuh alert."""
+
+    print("\n" + "=" * 65)
+    print(f"SECAGENTS — SECURITY ALERT {number}/{total}")
+    print("=" * 65)
+
+    # Normalize and validate the original alert.
+    event = normalize_alert(raw_event)
+    validate_event(event)
+
+    print("\nORIGINAL WAZUH EVIDENCE")
+    print("-" * 65)
+    print("Event ID:    ", event["event_id"])
+    print("Event Index: ", event.get("event_index"))
+    print("Hostname:    ", event["hostname"])
+    print("Timestamp:   ", event["timestamp"])
+    print("Rule ID:     ", event["rule_id"])
+    print("Severity:    ", event["severity"])
+    print("Description: ", event["description"])
+
+    print("\nSending alert to Qwen...")
+    start = time.time()
+
+    # The gateway performs its own normalization and validation.
+    result = gateway.process_alert(raw_event)
+
+    elapsed = time.time() - start
+
+    # Confirm the AI result references the original Wazuh record.
+    assert result["event_id"] == event["event_id"]
+    assert result["event_index"] == (event.get("event_index") or "")
+
+    print("\nAI SECURITY ANALYSIS")
+    print("-" * 65)
+    print("Classification:", result["classification"].upper())
+    print("Confidence:    ", f"{result['confidence']:.0%}")
+
+    print("\nSUMMARY")
+    print(result["summary"])
+
+    print("\nSOURCE CONTEXT")
+    print(result["source_context"])
+
+    print("\nUNCERTAINTY")
+    print(result["uncertainty"])
+
+    print("\nEVIDENCE")
+    for item in result["evidence"]:
+        print(f"  - {item}")
+
+    print("\nRECOMMENDED INVESTIGATION ACTIONS")
+    for item in result["recommended_actions"]:
+        print(f"  - {item}")
+
+    if result.get("mitre_explanation"):
+        print("\nMITRE ATT&CK CONTEXT")
+        print(result["mitre_explanation"])
+
+    print("\nVALIDATION")
+    print("-" * 65)
+    print("AI output schema:          PASS")
+    print("Original event references: PASS")
+    print(f"Processing time:           {elapsed:.2f} seconds")
+
+    return elapsed
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="SecAgents Live Wazuh AI Demonstration"
+        description="SecAgents AI Gateway Demonstration"
     )
 
     parser.add_argument(
-        "--limit",
-        type=int,
-        default=1,
-        help="Maximum number of Wazuh alerts to analyze (1-10)"
+        "--all",
+        action="store_true",
+        help="Analyze every alert in the dataset"
     )
 
     parser.add_argument(
-        "--minutes",
-        type=int,
-        default=1440,
-        help="Look back this many minutes (default: 1440)"
-    )
-
-    parser.add_argument(
-        "--min-level",
-        type=int,
-        default=7,
-        help="Minimum Wazuh rule level (default: 7)"
-    )
-
-    parser.add_argument(
-        "--client",
-        type=Path,
-        default=DEFAULT_CLIENT,
-        help="Path to Alex's existing Wazuh client"
+        "--file",
+        default=os.environ.get(
+            "SECAGENTS_DEMO_DATASET",
+            DEFAULT_DATASET
+        ),
+        help="Path to the exported Wazuh JSON dataset"
     )
 
     args = parser.parse_args()
 
-    if not 1 <= args.limit <= 10:
-        parser.error("--limit must be between 1 and 10")
-
-    if args.minutes <= 0:
-        parser.error("--minutes must be greater than zero")
-
-    if not 0 <= args.min_level <= 16:
-        parser.error("--min-level must be between 0 and 16")
-
-    client_path = args.client.expanduser().resolve()
-
-    if not client_path.is_file():
-        print(f"ERROR: Wazuh client not found: {client_path}")
+    if not os.path.isfile(args.file):
+        print("ERROR: Wazuh dataset not found.")
+        print("Check the --file argument.")
         return 1
 
+    with open(args.file, "r", encoding="utf-8") as file:
+        events = json.load(file)
+
+    if not isinstance(events, list) or not events:
+        print("ERROR: Dataset must contain a nonempty JSON list.")
+        return 1
+
+    selected_events = events if args.all else events[:1]
+
     print("\n" + "=" * 65)
-    print("             SECAGENTS LIVE WAZUH AI DEMO")
+    print("             SECAGENTS AI SECURITY ANALYSIS")
     print("=" * 65)
-    print("Source: Live Wazuh Indexer")
     print("Model: Qwen3.5:9b")
-    print("Mode: Read-only AI enrichment")
-    print(f"Maximum alerts: {args.limit}")
-    print(f"Lookback: {args.minutes} minutes")
-    print(f"Minimum Wazuh level: {args.min_level}")
+    print("Source: Previously exported Wazuh alerts")
+    print("Mode: Read-only AI enrichment demonstration")
 
-    # The export exists only inside a private temporary directory.
-    # It is not added to the Git repository.
-    with tempfile.TemporaryDirectory(
-        prefix="secagents-wazuh-"
-    ) as temporary_directory:
+    gateway = AIGateway()
 
-        export_path = (
-            Path(temporary_directory) / "wazuh-alerts.json"
-        )
+    passed = 0
+    failed = 0
 
-        command = [
-            sys.executable,
-            str(client_path),
-            "--min-level",
-            str(args.min_level),
-            "--minutes",
-            str(args.minutes),
-            "--limit",
-            str(args.limit),
-            "--output",
-            str(export_path),
-        ]
-
-        print("\nRetrieving recent Wazuh alerts...")
-        print("Alex's client will request authentication if needed.\n")
-
-        # Preserve the existing interactive password prompt.
-        # Do not capture or log credentials.
+    for number, raw_event in enumerate(selected_events, start=1):
         try:
-            completed = subprocess.run(
-                command,
-                cwd=client_path.parent,
-                check=False,
+            display_analysis(
+                number,
+                len(selected_events),
+                raw_event,
+                gateway
             )
-        except OSError as error:
-            print(f"ERROR: Could not start Wazuh client: {error}")
-            return 1
+            passed += 1
 
-        if completed.returncode != 0:
-            print("\nERROR: Wazuh alert retrieval failed.")
-            return 1
+        except Exception as error:
+            failed += 1
+            print(f"\nFAIL: {type(error).__name__}")
+            print("The alert could not be analyzed.")
 
-        if not export_path.is_file():
-            print("\nERROR: Wazuh client did not create an export.")
-            return 1
+    print("\n" + "=" * 65)
+    print("DEMONSTRATION RESULTS")
+    print("=" * 65)
+    print("Alerts processed:", len(selected_events))
+    print("Passed:          ", passed)
+    print("Failed:          ", failed)
+    print("Original evidence was not modified by this script.")
 
-        try:
-            with export_path.open(
-                "r",
-                encoding="utf-8"
-            ) as file:
-                records = json.load(file)
-        except (OSError, json.JSONDecodeError) as error:
-            print(f"\nERROR: Invalid Wazuh export: {error}")
-            return 1
-
-        if not isinstance(records, list):
-            print("\nERROR: Expected a JSON array of Wazuh alerts.")
-            return 1
-
-        if not records:
-            print("\nNo matching Wazuh alerts found.")
-            print("Try increasing --minutes or lowering --min-level.")
-            return 0
-
-        # Never process more alerts than requested.
-        records = records[:args.limit]
-
-        gateway = AIGateway()
-        passed = 0
-        failed = 0
-
-        for number, record in enumerate(records, start=1):
-            try:
-                display_analysis(
-                    number,
-                    len(records),
-                    record,
-                    gateway,
-                )
-                passed += 1
-            except Exception as error:
-                failed += 1
-                print(
-                    f"\nAlert {number} failed: "
-                    f"{type(error).__name__}: {error}"
-                )
-
-        print("\n" + "=" * 65)
-        print("LIVE WAZUH AI DEMONSTRATION RESULTS")
-        print("=" * 65)
-        print("Alerts retrieved:", len(records))
-        print("Passed:", passed)
-        print("Failed:", failed)
-        print("Temporary export removed when the script exits.")
-        print("No automated security actions were performed.")
-
-        return 0 if failed == 0 else 1
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":
